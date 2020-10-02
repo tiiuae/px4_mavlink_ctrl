@@ -12,6 +12,7 @@
 
 using std::placeholders::_1;
 using namespace std::chrono_literals;
+using namespace mavlink::common;
 
 class MavlinkCtrl : public rclcpp::Node
 {
@@ -22,8 +23,8 @@ class MavlinkCtrl : public rclcpp::Node
       buffer_(2041, 0),
       bytes_sent_(0)
     {
-      this->declare_parameter<int>("udp_local_port", 1999);
-      this->declare_parameter<int>("udp_remote_port", 2000);
+      this->declare_parameter<int>("udp_local_port", 14540);
+      this->declare_parameter<int>("udp_remote_port", 14580);
       this->declare_parameter<std::string>("target_ip", "127.0.0.1");
       this->get_parameter("udp_local_port", udp_local_port_);
       this->get_parameter("udp_remote_port", udp_remote_port_);
@@ -70,64 +71,157 @@ class MavlinkCtrl : public rclcpp::Node
     }
 
   private:
+
+    enum PX4_CUSTOM_MAIN_MODE {
+      PX4_CUSTOM_MAIN_MODE_MANUAL = 1,
+      PX4_CUSTOM_MAIN_MODE_ALTCTL,
+      PX4_CUSTOM_MAIN_MODE_POSCTL,
+      PX4_CUSTOM_MAIN_MODE_AUTO,
+      PX4_CUSTOM_MAIN_MODE_ACRO,
+      PX4_CUSTOM_MAIN_MODE_OFFBOARD,
+      PX4_CUSTOM_MAIN_MODE_STABILIZED,
+      PX4_CUSTOM_MAIN_MODE_RATTITUDE,
+      PX4_CUSTOM_MAIN_MODE_SIMPLE /* unused, but reserved for future use */
+    };
+
+    enum PX4_CUSTOM_SUB_MODE_AUTO {
+      PX4_CUSTOM_SUB_MODE_AUTO_READY = 1,
+      PX4_CUSTOM_SUB_MODE_AUTO_TAKEOFF,
+      PX4_CUSTOM_SUB_MODE_AUTO_LOITER,
+      PX4_CUSTOM_SUB_MODE_AUTO_MISSION,
+      PX4_CUSTOM_SUB_MODE_AUTO_RTL,
+      PX4_CUSTOM_SUB_MODE_AUTO_LAND,
+      PX4_CUSTOM_SUB_MODE_AUTO_RESERVED_DO_NOT_USE, // was PX4_CUSTOM_SUB_MODE_AUTO_RTGS, deleted 2020-03-05
+      PX4_CUSTOM_SUB_MODE_AUTO_FOLLOW_TARGET,
+      PX4_CUSTOM_SUB_MODE_AUTO_PRECLAND
+    };
+
     void topic_callback(const std_msgs::msg::String::SharedPtr msg)
     {
       /*Send NAV cmd */
-      mavlink::common::msg::COMMAND_LONG cmd;
-      mavlink::mavlink_message_t mavmsg;
+      std::map<std::string, std::function<void()>>::const_iterator it;
 
-      uint8_t *buf = (uint8_t*) buffer_.data();
-
-      cmd.target_system = 1;
-      cmd.target_component = 1;
       RCLCPP_INFO(this->get_logger(), "I heard: '%s'", msg->data.c_str());
+
       if (strcmp(msg->data.c_str(), "takeoff") == 0)
       {
-        RCLCPP_INFO(this->get_logger(), "takeoff cmd");
-        cmd.command = 22;
-        cmd.param1 = -1;
-        cmd.param2 = 0;
-        cmd.param3 = 0;
-        cmd.param4 = std::nan("0");
-        cmd.param5 = std::nan("0");
-        cmd.param6 = 0;
-        cmd.param7 = 500;
-
-        mavlink::MsgMap map(mavmsg);
-        cmd.serialize(map);
-        mavlink_finalize_message(&mavmsg, 255, 0, 33, 33, 152);
-        int len = mavlink_msg_to_send_buffer(buf, &mavmsg);
-        bytes_sent_ = sendto(sock_, buf, len, 0, (struct sockaddr*)&gcAddr_, sizeof(struct sockaddr_in));
-        RCLCPP_INFO(this->get_logger(), "bytes_sent: %d", bytes_sent_);
-
-        cmd.command = 400;
-        cmd.param1 = 1;
-        cmd.param7 = 0;
-
-        cmd.serialize(map);
-        mavlink_finalize_message(&mavmsg, 255, 0, 33, 33, 152);
-        len = mavlink_msg_to_send_buffer(buf, &mavmsg);
-        bytes_sent_ = sendto(sock_, buf, len, 0, (struct sockaddr*)&gcAddr_, sizeof(struct sockaddr_in));
-        RCLCPP_INFO(this->get_logger(), "bytes_sent: %d", bytes_sent_);
-
+        this->do_takeoff();
       }
       else if (strcmp(msg->data.c_str(), "land") == 0)
       {
-        cmd.command = 21;
-        cmd.param1 = 0;
-        cmd.param2 = 0;
-        cmd.param3 = 0;
-        cmd.param4 = 0;
-        cmd.param5 = 0;
-        cmd.param6 = 0;
-        cmd.param7 = 10;
-        mavlink::MsgMap map(mavmsg);
-        cmd.serialize(map);
-        mavlink_finalize_message(&mavmsg, 255, 0, 33, 33, 152);
-        int len = mavlink_msg_to_send_buffer(buf, &mavmsg);
-        bytes_sent_ = sendto(sock_, buf, len, 0, (struct sockaddr*)&gcAddr_, sizeof(struct sockaddr_in));
-        RCLCPP_INFO(this->get_logger(), "bytes_sent: %d", bytes_sent_);
+        this->do_land();
       }
+      else if (strcmp(msg->data.c_str(), "start mission") == 0)
+      {
+        this->do_start_mission();
+      }
+      else if (strcmp(msg->data.c_str(), "return to launch") == 0)
+      {
+        this->do_return_to_launch();
+      }
+      else if (strcmp(msg->data.c_str(), "hold") == 0)
+      {
+        this->do_hold();
+      }
+      else if (strcmp(msg->data.c_str(), "continue mission") == 0)
+      {
+        this->do_continue_mission();
+      }
+      else
+      {
+        RCLCPP_INFO(this->get_logger(), "Unknown command!!");
+      }
+
+    }
+
+    void send_msg(mavlink::Message &msg, std::string msg_name)
+    {
+      mavlink::mavlink_message_t mavmsg;
+      uint8_t *buf = (uint8_t*) buffer_.data();
+      mavlink::Message::Info info = msg.get_message_info();
+
+      RCLCPP_INFO(this->get_logger(), "MAVLINK SEND: MSG %s", msg_name.c_str());
+
+      mavlink::MsgMap map(mavmsg);
+      msg.serialize(map);
+
+      mavlink_finalize_message(&mavmsg, 255, 0, info.min_length, info.length, info.crc_extra);
+      int len = mavlink_msg_to_send_buffer(buf, &mavmsg);
+      bytes_sent_ = sendto(sock_, buf, len, 0, (struct sockaddr*)&gcAddr_, sizeof(struct sockaddr_in));
+      RCLCPP_INFO(this->get_logger(), "bytes_sent: %d", bytes_sent_);
+    }
+
+    void send_cmd(mavlink::common::msg::COMMAND_LONG &cmd, std::string cmd_name)
+    {
+      RCLCPP_INFO(this->get_logger(), "MAVLINK SEND: CMD %s", cmd_name.c_str());
+      cmd.target_system = 1;
+      cmd.target_component = 1;
+      RCLCPP_INFO(this->get_logger(), "CMD:%d tid:%d, tcom:%d, p1:%f p2:%f p3:%f p4:%f p5:%f p6:%f p7:%f",
+      cmd.command, cmd.target_system, cmd.target_component, cmd.param1, cmd.param2, cmd.param3, cmd.param4, cmd.param5, cmd.param6, cmd.param7);
+
+      this->send_msg(cmd, "CMD-" + cmd_name);
+    }
+
+    void do_takeoff()
+    {
+      mavlink::common::msg::COMMAND_LONG cmd = {};
+
+      cmd.command = static_cast<uint16_t>( MAV_CMD::NAV_TAKEOFF );
+      cmd.param1 = -1;
+      cmd.param4 = std::nan("0");
+      cmd.param5 = std::nan("0");
+      cmd.param7 = 500;
+      this->send_cmd(cmd, "takeoff");
+
+      cmd.command = 400;
+      cmd.param1 = 1;
+      cmd.param7 = 0;
+      this->send_cmd(cmd, "arm");
+    }
+
+    void do_land()
+    {
+      mavlink::common::msg::COMMAND_LONG cmd = {};
+      cmd.command = static_cast<uint16_t>( MAV_CMD::NAV_LAND );
+      cmd.param7 = 10;
+      this->send_cmd(cmd, "land");
+    }
+
+    void do_start_mission()
+    {
+      mavlink::common::msg::COMMAND_LONG cmd = {};
+      cmd.command = static_cast<uint16_t>( MAV_CMD::MISSION_START );
+      cmd.param1 = 0;
+      cmd.param2 = 0;
+      this->send_cmd(cmd, "start mission");
+    }
+
+    void do_return_to_launch()
+    {
+      mavlink::common::msg::COMMAND_LONG cmd = {};
+      cmd.command = static_cast<uint16_t>( MAV_CMD::NAV_RETURN_TO_LAUNCH );
+      this->send_cmd(cmd, "return to launch");
+    }
+
+    void do_hold()
+    {
+      mavlink::common::msg::SET_MODE msg = {};
+      msg.custom_mode = static_cast<uint8_t>(PX4_CUSTOM_MAIN_MODE::PX4_CUSTOM_MAIN_MODE_POSCTL) << 16; // 0x30000
+      msg.target_system = 1;
+      msg.base_mode = 209.0;
+      RCLCPP_INFO(this->get_logger(), "SET_MODE custom_mode: %f", (double)msg.custom_mode);
+      this->send_msg(msg, "SET_MODE:hold");
+    }
+
+    void do_continue_mission()
+    {
+      mavlink::common::msg::SET_MODE msg = {};
+      msg.custom_mode = (static_cast<uint8_t>(PX4_CUSTOM_MAIN_MODE::PX4_CUSTOM_MAIN_MODE_AUTO) << 16) |
+                        (static_cast<uint8_t>(PX4_CUSTOM_SUB_MODE_AUTO::PX4_CUSTOM_SUB_MODE_AUTO_MISSION) << 24); // 0x4040000
+      msg.target_system = 1;
+      msg.base_mode = 217.0;
+      RCLCPP_INFO(this->get_logger(), "SET_MODE custom_mode: %f", (double)msg.custom_mode);
+      this->send_msg(msg, "SET_MODE:continue mission");
     }
 
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr subscription_;
