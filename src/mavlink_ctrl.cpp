@@ -23,8 +23,8 @@ class MavlinkCtrl : public rclcpp::Node
       buffer_(2041, 0),
       bytes_sent_(0)
     {
-      this->declare_parameter<int>("udp_local_port", 14540);
-      this->declare_parameter<int>("udp_remote_port", 14580);
+      this->declare_parameter<int>("udp_local_port", 14590);
+      this->declare_parameter<int>("udp_remote_port", 14591);
       this->declare_parameter<std::string>("target_ip", "127.0.0.1");
       this->get_parameter("udp_local_port", udp_local_port_);
       this->get_parameter("udp_remote_port", udp_remote_port_);
@@ -34,14 +34,13 @@ class MavlinkCtrl : public rclcpp::Node
       RCLCPP_INFO(this->get_logger(), "udp_remote_port_: %d", udp_remote_port_);
       RCLCPP_INFO(this->get_logger(), "target_ip       : '%s'", target_ip_.c_str());
 
-      //buffer(BUFFER_LENGTH, 0);
       memset(&locAddr_, 0, sizeof(locAddr_));
       locAddr_.sin_family = AF_INET;
-      locAddr_.sin_addr.s_addr = INADDR_ANY;
+      locAddr_.sin_addr.s_addr = htonl(INADDR_ANY);
       locAddr_.sin_port = htons(udp_local_port_);
 
-      /* Bind the socket to port 14551 - necessary to receive packets from qgroundcontrol */
-      if (-1 == bind(sock_,(struct sockaddr *)&locAddr_, sizeof(struct sockaddr)))
+      /* Bind a socket to local address */
+      if (bind(sock_,(struct sockaddr *)&locAddr_, sizeof(struct sockaddr)) < 0)
       {
         perror("error bind failed");
         close(sock_);
@@ -50,10 +49,10 @@ class MavlinkCtrl : public rclcpp::Node
 
       /* Attempt to make it non blocking */
     #if (defined __QNX__) | (defined __QNXNTO__)
-    	if (fcntl(sock_, F_SETFL, O_NONBLOCK | FASYNC) < 0)
-    #else
-    	if (fcntl(sock_, F_SETFL, O_NONBLOCK | O_ASYNC) < 0)
-    #endif
+      if (fcntl(sock_, F_SETFL, O_NONBLOCK | FASYNC) < 0)
+     #else
+      if (fcntl(sock_, F_SETFL, O_NONBLOCK | O_ASYNC) < 0)
+     #endif
       {
         fprintf(stderr, "error setting nonblocking: %s\n", strerror(errno));
         close(sock_);
@@ -145,7 +144,7 @@ class MavlinkCtrl : public rclcpp::Node
       mavlink::MsgMap map(mavmsg);
       msg.serialize(map);
 
-      mavlink_finalize_message(&mavmsg, 255, 0, info.min_length, info.length, info.crc_extra);
+      mavlink_finalize_message(&mavmsg, 254, 0, info.min_length, info.length, info.crc_extra);
       int len = mavlink_msg_to_send_buffer(buf, &mavmsg);
       bytes_sent_ = sendto(sock_, buf, len, 0, (struct sockaddr*)&gcAddr_, sizeof(struct sockaddr_in));
       RCLCPP_INFO(this->get_logger(), "bytes_sent: %d", bytes_sent_);
@@ -235,7 +234,6 @@ class MavlinkCtrl : public rclcpp::Node
   	int sock_ = socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP);
   	struct sockaddr_in gcAddr_;
   	struct sockaddr_in locAddr_;
-  	//struct sockaddr_in fromAddr;
   	std::vector<uint8_t> buffer_;
     uint32_t bytes_sent_;
     std::string udp_l_string_;

@@ -1,7 +1,7 @@
 <launch>
   <node name="mavlink_control" pkg="px4_mavlink_ctrl" exec="mavlink_ctrl" >
-    <param name="udp_local_port" value="14540"/>
-    <param name="udp_remote_port" value="14580"/>
+    <param name="udp_local_port" value="14590"/>
+    <param name="udp_remote_port" value="14591"/>
     <param name="target_ip" value="127.0.0.1"/>
   </node>
 </launch>
