@@ -22,8 +22,10 @@ find_package(rclcpp REQUIRED)
 # further dependencies manually.
 # find_package(<dependency> REQUIRED)
 
+find_package(nav_msgs REQUIRED)
+
 add_executable(mavlink_ctrl src/mavlink_ctrl.cpp)
-ament_target_dependencies(mavlink_ctrl rclcpp std_msgs)
+ament_target_dependencies(mavlink_ctrl rclcpp std_msgs nav_msgs)
 
 target_include_directories(mavlink_ctrl
   PUBLIC

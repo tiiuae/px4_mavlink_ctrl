@@ -6,6 +6,7 @@
 #include <arpa/inet.h>
 #include "rclcpp/rclcpp.hpp"
 #include "std_msgs/msg/string.hpp"
+#include "nav_msgs/msg/path.hpp"
 #include <vector>
 #include <common/common.hpp>
 #include <cmath>
@@ -66,6 +67,9 @@ class MavlinkCtrl : public rclcpp::Node
 
       subscription_ = this->create_subscription<std_msgs::msg::String>(
         "mavlinkcmd", 10, std::bind(&MavlinkCtrl::topic_callback, this, _1));
+
+      wp_subscription_ = this->create_subscription<nav_msgs::msg::Path>(
+        "path", 10, std::bind(&MavlinkCtrl::waypoints_callback, this, _1));
 
     }
 
@@ -132,6 +136,11 @@ class MavlinkCtrl : public rclcpp::Node
       }
 
     }
+
+    void waypoints_callback(const nav_msgs::msg::Path::SharedPtr msg)
+    {
+		RCLCPP_INFO(this->get_logger(), "Got %d waypoints %s", msg->poses.size());
+	}
 
     void send_msg(mavlink::Message &msg, std::string msg_name)
     {
@@ -225,6 +234,8 @@ class MavlinkCtrl : public rclcpp::Node
 
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr subscription_;
 
+	rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr wp_subscription_;
+	
     const int BUFFER_LENGTH = 2041;
     size_t count_;
     uint16_t udp_local_port_;
