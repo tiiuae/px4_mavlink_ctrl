@@ -110,19 +110,19 @@ class MavlinkCtrl : public rclcpp::Node
       {
         this->do_land();
       }
-      else if (strcmp(msg->data.c_str(), "start mission") == 0)
+      else if (strcmp(msg->data.c_str(), "start_mission") == 0)
       {
         this->do_start_mission();
       }
-      else if (strcmp(msg->data.c_str(), "return to launch") == 0)
+      else if (strcmp(msg->data.c_str(), "return_home") == 0)
       {
         this->do_return_to_launch();
       }
-      else if (strcmp(msg->data.c_str(), "hold") == 0)
+      else if (strcmp(msg->data.c_str(), "pause_mission") == 0)
       {
         this->do_hold();
       }
-      else if (strcmp(msg->data.c_str(), "continue mission") == 0)
+      else if (strcmp(msg->data.c_str(), "resume_mission") == 0)
       {
         this->do_continue_mission();
       }
