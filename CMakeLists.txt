@@ -18,6 +18,8 @@ endif()
 # find dependencies
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(MAVSDK REQUIRED)
+
 # uncomment the following section in order to fill in
 # further dependencies manually.
 # find_package(<dependency> REQUIRED)
@@ -29,14 +31,15 @@ ament_target_dependencies(mavlink_ctrl rclcpp std_msgs nav_msgs)
 
 target_include_directories(mavlink_ctrl
   PUBLIC
-    ../mavlink/include
     include)
 
-#install(
-#  DIRECTORY /work/fog/px4-firmware/mavlink/include/mavlink/v2.0/common
-#  DESTINATION include
-#)
-
+target_link_libraries(mavlink_ctrl
+    MAVSDK::mavsdk_action
+    MAVSDK::mavsdk_mission
+    MAVSDK::mavsdk_telemetry
+    MAVSDK::mavsdk
+)
+ 
 install(TARGETS
   mavlink_ctrl
   DESTINATION lib/${PROJECT_NAME})

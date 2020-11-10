@@ -8,12 +8,18 @@
 #include "std_msgs/msg/string.hpp"
 #include "nav_msgs/msg/path.hpp"
 #include <vector>
-#include <common/common.hpp>
 #include <cmath>
 
-using std::placeholders::_1;
-using namespace std::chrono_literals;
-using namespace mavlink::common;
+#include <mavsdk/mavsdk.h>
+#include <mavsdk/plugins/action/action.h>
+#include <mavsdk/plugins/mission/mission.h>
+#include <mavsdk/plugins/telemetry/telemetry.h>
+#include <mavsdk/plugins/info/info.h>
+
+using namespace mavsdk;
+using namespace std::placeholders; // for `_1`
+using namespace std::chrono; // for seconds(), milliseconds()
+using namespace std::this_thread; // for sleep_for()
 
 class MavlinkCtrl : public rclcpp::Node
 {
@@ -24,47 +30,59 @@ class MavlinkCtrl : public rclcpp::Node
       buffer_(2041, 0),
       bytes_sent_(0)
     {
-      this->declare_parameter<int>("udp_local_port", 14590);
-      this->declare_parameter<int>("udp_remote_port", 14591);
+      this->declare_parameter<int>("udp_remote_port", 14540);
       this->declare_parameter<std::string>("target_ip", "127.0.0.1");
-      this->get_parameter("udp_local_port", udp_local_port_);
       this->get_parameter("udp_remote_port", udp_remote_port_);
       this->get_parameter("target_ip", target_ip_);
 
-      RCLCPP_INFO(this->get_logger(), "udp_local_port  : %d", udp_local_port_);
       RCLCPP_INFO(this->get_logger(), "udp_remote_port_: %d", udp_remote_port_);
       RCLCPP_INFO(this->get_logger(), "target_ip       : '%s'", target_ip_.c_str());
 
-      memset(&locAddr_, 0, sizeof(locAddr_));
-      locAddr_.sin_family = AF_INET;
-      locAddr_.sin_addr.s_addr = htonl(INADDR_ANY);
-      locAddr_.sin_port = htons(udp_local_port_);
-
-      /* Bind a socket to local address */
-      if (bind(sock_,(struct sockaddr *)&locAddr_, sizeof(struct sockaddr)) < 0)
-      {
-        perror("error bind failed");
-        close(sock_);
-        exit(EXIT_FAILURE);
+      ConnectionResult connection_result = mavsdk.add_udp_connection(target_ip_.c_str(),udp_remote_port_);
+      if (connection_result != ConnectionResult::Success) {
+          RCLCPP_ERROR(this->get_logger(), "Connection failed: %s", connection_result);
+          exit(EXIT_FAILURE);
       }
 
-      /* Attempt to make it non blocking */
-    #if (defined __QNX__) | (defined __QNXNTO__)
-      if (fcntl(sock_, F_SETFL, O_NONBLOCK | FASYNC) < 0)
-     #else
-      if (fcntl(sock_, F_SETFL, O_NONBLOCK | O_ASYNC) < 0)
-     #endif
-      {
-        fprintf(stderr, "error setting nonblocking: %s\n", strerror(errno));
-        close(sock_);
-        exit(EXIT_FAILURE);
+      // Wait for connection to mav id 1
+      bool connected = false;
+      unsigned i;
+      while(!connected) {
+          for (i=0; i < mavsdk.systems().size(); i++) {
+              if  (mavsdk.systems().at(i)->get_system_id() == 1) {
+                  connected=true;
+                  break;
+              }
+          }
+          std::this_thread::sleep_for(std::chrono::seconds(1));
       }
 
-      memset(&gcAddr_, 0, sizeof(gcAddr_));
-      gcAddr_.sin_family = AF_INET;
-      gcAddr_.sin_addr.s_addr = inet_addr(target_ip_.c_str());
-      gcAddr_.sin_port = htons(udp_remote_port_);
+      RCLCPP_INFO(this->get_logger(), "Target connected");
 
+      system = mavsdk.systems().at(i);
+      action = std::make_shared<Action>(system);
+      mission = std::make_shared<Mission>(system);
+      telemetry = std::make_shared<Telemetry>(system);
+
+#if 0 // TODO asynch notifications along these lines...
+      auto new_system_promise = std::promise<std::shared_ptr<System>>{};
+      auto new_system_future = new_system_promise.get_future();
+      mavsdk.subscribe_on_new_system([&mavsdk, &new_system_promise]() {
+                                         new_system_promise.set_value(mavsdk.systems().at(0));
+                                         mavsdk.subscribe_on_new_system(nullptr);
+                                     });
+      
+      system = new_system_future.get();
+      
+      system->subscribe_is_connected([](bool is_connected) {
+                                         if (is_connected) {
+                                             std::cout << "System has been discovered" << std::endl;
+                                         } else {
+                                             std::cout << "System has timed out" << std::endl;
+                                         }
+                                     });
+#endif
+	
       subscription_ = this->create_subscription<std_msgs::msg::String>(
         "mavlinkcmd", 10, std::bind(&MavlinkCtrl::topic_callback, this, _1));
 
@@ -75,29 +93,11 @@ class MavlinkCtrl : public rclcpp::Node
 
   private:
 
-    enum PX4_CUSTOM_MAIN_MODE {
-      PX4_CUSTOM_MAIN_MODE_MANUAL = 1,
-      PX4_CUSTOM_MAIN_MODE_ALTCTL,
-      PX4_CUSTOM_MAIN_MODE_POSCTL,
-      PX4_CUSTOM_MAIN_MODE_AUTO,
-      PX4_CUSTOM_MAIN_MODE_ACRO,
-      PX4_CUSTOM_MAIN_MODE_OFFBOARD,
-      PX4_CUSTOM_MAIN_MODE_STABILIZED,
-      PX4_CUSTOM_MAIN_MODE_RATTITUDE,
-      PX4_CUSTOM_MAIN_MODE_SIMPLE /* unused, but reserved for future use */
-    };
-
-    enum PX4_CUSTOM_SUB_MODE_AUTO {
-      PX4_CUSTOM_SUB_MODE_AUTO_READY = 1,
-      PX4_CUSTOM_SUB_MODE_AUTO_TAKEOFF,
-      PX4_CUSTOM_SUB_MODE_AUTO_LOITER,
-      PX4_CUSTOM_SUB_MODE_AUTO_MISSION,
-      PX4_CUSTOM_SUB_MODE_AUTO_RTL,
-      PX4_CUSTOM_SUB_MODE_AUTO_LAND,
-      PX4_CUSTOM_SUB_MODE_AUTO_RESERVED_DO_NOT_USE, // was PX4_CUSTOM_SUB_MODE_AUTO_RTGS, deleted 2020-03-05
-      PX4_CUSTOM_SUB_MODE_AUTO_FOLLOW_TARGET,
-      PX4_CUSTOM_SUB_MODE_AUTO_PRECLAND
-    };
+    Mavsdk mavsdk;
+    std::shared_ptr<System> system;
+    std::shared_ptr<mavsdk::Action> action;
+    std::shared_ptr<mavsdk::Mission> mission;
+    std::shared_ptr<mavsdk::Telemetry> telemetry;
 
     void topic_callback(const std_msgs::msg::String::SharedPtr msg)
     {
@@ -142,94 +142,71 @@ class MavlinkCtrl : public rclcpp::Node
 		RCLCPP_INFO(this->get_logger(), "Got %d waypoints %s", msg->poses.size());
 	}
 
-    void send_msg(mavlink::Message &msg, std::string msg_name)
-    {
-      mavlink::mavlink_message_t mavmsg;
-      uint8_t *buf = (uint8_t*) buffer_.data();
-      mavlink::Message::Info info = msg.get_message_info();
-
-      RCLCPP_INFO(this->get_logger(), "MAVLINK SEND: MSG %s", msg_name.c_str());
-
-      mavlink::MsgMap map(mavmsg);
-      msg.serialize(map);
-
-      mavlink_finalize_message(&mavmsg, 254, 0, info.min_length, info.length, info.crc_extra);
-      int len = mavlink_msg_to_send_buffer(buf, &mavmsg);
-      bytes_sent_ = sendto(sock_, buf, len, 0, (struct sockaddr*)&gcAddr_, sizeof(struct sockaddr_in));
-      RCLCPP_INFO(this->get_logger(), "bytes_sent: %d", bytes_sent_);
-    }
-
-    void send_cmd(mavlink::common::msg::COMMAND_LONG &cmd, std::string cmd_name)
-    {
-      RCLCPP_INFO(this->get_logger(), "MAVLINK SEND: CMD %s", cmd_name.c_str());
-      cmd.target_system = 1;
-      cmd.target_component = 1;
-      RCLCPP_INFO(this->get_logger(), "CMD:%d tid:%d, tcom:%d, p1:%f p2:%f p3:%f p4:%f p5:%f p6:%f p7:%f",
-      cmd.command, cmd.target_system, cmd.target_component, cmd.param1, cmd.param2, cmd.param3, cmd.param4, cmd.param5, cmd.param6, cmd.param7);
-
-      this->send_msg(cmd, "CMD-" + cmd_name);
-    }
-
     void do_takeoff()
     {
-      mavlink::common::msg::COMMAND_LONG cmd = {};
+        // Arm vehicle
+        const Action::Result arm_result = action->arm();        
+        if (arm_result != Action::Result::Success) {
+            std::cout << "Arming failed" <<  std::endl;
+        }
 
-      cmd.command = static_cast<uint16_t>( MAV_CMD::NAV_TAKEOFF );
-      cmd.param1 = -1;
-      cmd.param4 = std::nan("0");
-      cmd.param5 = std::nan("0");
-      cmd.param7 = 500;
-      this->send_cmd(cmd, "takeoff");
+        // Set altitude to 3 meters
+        action->set_takeoff_altitude(3.0);
 
-      cmd.command = 400;
-      cmd.param1 = 1;
-      cmd.param7 = 0;
-      this->send_cmd(cmd, "arm");
+        // Command Take off
+        const Action::Result takeoff_result = action->takeoff();
+        if (takeoff_result != Action::Result::Success) {
+            std::cout << "Takeoff failed" << std::endl;
+        }
+
     }
 
     void do_land()
     {
-      mavlink::common::msg::COMMAND_LONG cmd = {};
-      cmd.command = static_cast<uint16_t>( MAV_CMD::NAV_LAND );
-      cmd.param7 = 10;
-      this->send_cmd(cmd, "land");
+        const Action::Result landing_result = action->land();
+        if (landing_result != Action::Result::Success) {
+            std::cout << "Landing failed" << std::endl;
+        }
     }
 
     void do_start_mission()
     {
-      mavlink::common::msg::COMMAND_LONG cmd = {};
-      cmd.command = static_cast<uint16_t>( MAV_CMD::MISSION_START );
-      cmd.param1 = 0;
-      cmd.param2 = 0;
-      this->send_cmd(cmd, "start mission");
+        // Arm vehicle
+        const Action::Result arm_result = action->arm();        
+        if (arm_result != Action::Result::Success) {
+            std::cout << "Arming failed" <<  std::endl;
+        }
+
+        // Start mission
+        const Mission::Result result = mission->start_mission();
+        if (result != Mission::Result::Success) {
+            std::cout << "Mission start failed (" << std::endl;
+        }
     }
 
     void do_return_to_launch()
     {
-      mavlink::common::msg::COMMAND_LONG cmd = {};
-      cmd.command = static_cast<uint16_t>( MAV_CMD::NAV_RETURN_TO_LAUNCH );
-      this->send_cmd(cmd, "return to launch");
+        const Action::Result rtl_result = action->return_to_launch();
+        if (rtl_result != Action::Result::Success) {
+            std::cout << "RTL failed (" << std::endl;
+            return;
+        }
     }
 
     void do_hold()
     {
-      mavlink::common::msg::SET_MODE msg = {};
-      msg.custom_mode = static_cast<uint8_t>(PX4_CUSTOM_MAIN_MODE::PX4_CUSTOM_MAIN_MODE_POSCTL) << 16; // 0x30000
-      msg.target_system = 1;
-      msg.base_mode = 209.0;
-      RCLCPP_INFO(this->get_logger(), "SET_MODE custom_mode: %f", (double)msg.custom_mode);
-      this->send_msg(msg, "SET_MODE:hold");
+        const Mission::Result result = mission->pause_mission();
+        if (result != Mission::Result::Success) {
+            std::cout << "Mission pause failed (" << std::endl;
+        }
     }
 
     void do_continue_mission()
     {
-      mavlink::common::msg::SET_MODE msg = {};
-      msg.custom_mode = (static_cast<uint8_t>(PX4_CUSTOM_MAIN_MODE::PX4_CUSTOM_MAIN_MODE_AUTO) << 16) |
-                        (static_cast<uint8_t>(PX4_CUSTOM_SUB_MODE_AUTO::PX4_CUSTOM_SUB_MODE_AUTO_MISSION) << 24); // 0x4040000
-      msg.target_system = 1;
-      msg.base_mode = 217.0;
-      RCLCPP_INFO(this->get_logger(), "SET_MODE custom_mode: %f", (double)msg.custom_mode);
-      this->send_msg(msg, "SET_MODE:continue mission");
+        const Mission::Result result = mission->start_mission();
+        if (result != Mission::Result::Success) {
+            std::cout << "Mission continue failed (" << std::endl;
+        }
     }
 
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr subscription_;
