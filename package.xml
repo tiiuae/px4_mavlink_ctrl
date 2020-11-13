@@ -7,6 +7,10 @@
   <maintainer email="jnippula@todo.todo">jnippula</maintainer>
   <license>TODO: License declaration</license>
 
+  <depend>mavsdk</depend>
+  <depend>nav_msgs</depend>
+  <depend>rclcpp</depend>
+
   <buildtool_depend>ament_cmake</buildtool_depend>
 
   <test_depend>ament_lint_auto</test_depend>
