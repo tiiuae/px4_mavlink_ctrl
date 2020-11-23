@@ -139,8 +139,36 @@ class MavlinkCtrl : public rclcpp::Node
 
     void waypoints_callback(const nav_msgs::msg::Path::SharedPtr msg)
     {
-		RCLCPP_INFO(this->get_logger(), "Got %d waypoints %s", msg->poses.size());
-	}
+        RCLCPP_INFO(this->get_logger(), "Got %d waypoints", msg->poses.size());
+
+        Mission::MissionPlan mission_plan{};
+
+        for (size_t i = 0; i < msg->poses.size(); i++) {
+            std::shared_ptr<Mission::MissionItem> new_item(new Mission::MissionItem());
+            new_item->latitude_deg = msg->poses[i].pose.position.x;
+            new_item->longitude_deg = msg->poses[i].pose.position.y;
+            new_item->relative_altitude_m = msg->poses[i].pose.position.z;
+            new_item->speed_m_s = NAN; // Use the default
+            new_item->is_fly_through = true;
+            new_item->gimbal_pitch_deg = 0.0f;
+            new_item->gimbal_yaw_deg = 0.0f;
+            new_item->camera_action = Mission::MissionItem::CameraAction::None;
+            new_item->loiter_time_s = 0.0f;
+            new_item->camera_photo_interval_s = 0.0f;
+            mission_plan.mission_items.push_back(*new_item);
+        }
+
+        auto prom = std::make_shared<std::promise<Mission::Result>>();
+        auto future_result = prom->get_future();
+
+        mission->upload_mission_async(
+            mission_plan, [prom](Mission::Result result) { prom->set_value(result); });
+
+        const Mission::Result result = future_result.get();
+        if (result != Mission::Result::Success) {
+            RCLCPP_ERROR(this->get_logger(), "Waypoint upload failed!");
+        }
+    }
 
     void do_takeoff()
     {
