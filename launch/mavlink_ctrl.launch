@@ -1,5 +1,5 @@
 <launch>
-  <node name="mavlink_control" pkg="px4_mavlink_ctrl" exec="mavlink_ctrl" >
+  <node name="mavlink_control" pkg="px4_mavlink_ctrl" exec="mavlink_ctrl" namespace='$(env DRONE_DEVICE_ID)'>
     <param name="udp_remote_port" value="14590"/>
     <param name="target_ip" value="127.0.0.1"/>
   </node>
