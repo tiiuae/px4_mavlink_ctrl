@@ -84,10 +84,10 @@ class MavlinkCtrl : public rclcpp::Node
 #endif
 	
       subscription_ = this->create_subscription<std_msgs::msg::String>(
-        "mavlinkcmd", 10, std::bind(&MavlinkCtrl::topic_callback, this, _1));
+        "mavlinkcmd", rclcpp::SystemDefaultsQoS(), std::bind(&MavlinkCtrl::topic_callback, this, _1));
 
       wp_subscription_ = this->create_subscription<nav_msgs::msg::Path>(
-        "path", 10, std::bind(&MavlinkCtrl::waypoints_callback, this, _1));
+        "path", rclcpp::SystemDefaultsQoS(), std::bind(&MavlinkCtrl::waypoints_callback, this, _1));
 
     }
 
